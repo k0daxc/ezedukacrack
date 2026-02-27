@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Image Viewer</title>
+
+  <link rel="stylesheet" href="stylesheets/font.css">
+  <link rel="stylesheet" href="stylesheets/bundles/603.bundle.css">
+  <link rel="stylesheet" href="stylesheets/bundles/670.bundle.css">
+  <link rel="stylesheet" href="stylesheets/bundles/229.bundle.css">
+  <link rel="stylesheet" href="stylesheets/bundles/165.bundle.css">
+  <link rel="stylesheet" href="stylesheets/bundles/918.bundle.css">
+  <link rel="stylesheet" href="stylesheets/bundles/edit.bundle.css">
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+    #edit-page {
+      transform-origin: top left;
+      /* width/height set dynamically by JS below */
+    }
+  </style>
+
+  <script>
+    /* ── Dynamic viewport scaling ──────────────────────────────────────────
+     * The editor is built for a ~1000 px wide desktop viewport.
+     * We measure the actual window size and scale #edit-page so it always
+     * fills the screen exactly, updating instantly on every resize.
+     */
+    var EDITOR_BASE_W = 1000;   /* assumed natural width of the editor UI */
+
+    function scaleEditor() {
+      var el = document.getElementById('edit-page');
+      if (!el) return;
+
+      var vw = window.innerWidth;
+      var vh = window.innerHeight;
+
+      /* Scale to fit width only — height is natural, dark space fills below */
+      var scale = vw / EDITOR_BASE_W;
+
+      /* On large screens don't upscale beyond 1 */
+      if (scale > 1) scale = 1;
+
+      el.style.transform = 'scale(' + scale + ')';
+      el.style.width      = (vw  / scale) + 'px';
+      el.style.height     = (vh  / scale) + 'px';
+    }
+
+    window.addEventListener('resize', scaleEditor);
+    /* Run once DOM is ready, and again after bundles mount the React tree */
+    document.addEventListener('DOMContentLoaded', scaleEditor);
+    /* Also poll briefly after load in case React renders late */
+    setTimeout(scaleEditor, 500);
+    setTimeout(scaleEditor, 1500);
+  </script>
+
+  <!-- Chrome Extension API Mock — runs before any bundle -->
+  <script>
+  (function () {
+    'use strict';
+
+    /* ── in-memory store ── */
+    var _store = {};
+    _store['options'] = JSON.stringify({});   /* prevents Yh() crash */
+
+    /* ── postMessage image delivery ─────────────────────────────────────
+     *
+     * eduka.html converts eduka.png → dataURL on the parent side
+     * (same file:// origin, no CORS) then posts it here.
+     * We seed fileUrls with that dataURL and only then load the bundles,
+     * so the editor receives a data: URI — crossOrigin="Anonymous" is harmless.
+     */
+    var _bundlesLoaded = false;
+
+    function _loadBundles() {
+      if (_bundlesLoaded) return;
+      _bundlesLoaded = true;
+      [
+        'javascripts/bundles/232.bundle.js',
+        'javascripts/bundles/603.bundle.js',
+        'javascripts/bundles/67.bundle.js',
+        'javascripts/bundles/549.bundle.js',
+        'javascripts/bundles/670.bundle.js',
+        'javascripts/bundles/464.bundle.js',
+        'javascripts/bundles/165.bundle.js',
+        'javascripts/bundles/11.bundle.js',
+        'javascripts/bundles/918.bundle.js',
+        'javascripts/bundles/707.bundle.js',
+        'javascripts/bundles/edit.bundle.js'
+      ].forEach(function (src) {
+        var s = document.createElement('script');
+        s.src = src;
+        document.body.appendChild(s);
+      });
+    }
+
+    window.addEventListener('message', function (e) {
+      if (e.data && e.data.type === 'eduka-image' && e.data.dataUrl) {
+        _store['fileUrls'] = JSON.stringify([e.data.dataUrl]);
+        _loadBundles();
+      }
+    });
+
+    /* Signal parent that we are ready to receive the image */
+    setTimeout(function () {
+      window.parent.postMessage({ type: 'eduka-ready' }, '*');
+    }, 50);
+
+    /* Safety: load anyway after 10 s if no message arrives */
+    setTimeout(function () { if (!_bundlesLoaded) _loadBundles(); }, 10000);
+
+    /* ── storage mock ── */
+    var storageMock = {
+      _data: _store,
+      get: function (keys, cb) {
+        var res = {};
+        if (keys === null || keys === undefined) {
+          res = Object.assign({}, this._data);
+        } else if (typeof keys === 'string') {
+          res[keys] = keys === 'options' ? {} : (this._data[keys] !== undefined ? this._data[keys] : null);
+        } else if (Array.isArray(keys)) {
+          var d = this._data;
+          keys.forEach(function (k) {
+            res[k] = k === 'options' ? {} : (d[k] !== undefined ? d[k] : null);
+          });
+        }
+        if (typeof cb === 'function') setTimeout(function () { cb(res); }, 0);
+      },
+      set: function (items, cb) {
+        Object.assign(this._data, items);
+        if (typeof cb === 'function') setTimeout(cb, 0);
+      },
+      remove: function (keys, cb) {
+        (Array.isArray(keys) ? keys : [keys]).forEach(function (k) { delete _store[k]; });
+        if (typeof cb === 'function') setTimeout(cb, 0);
+      },
+      clear: function (cb) { _store = {}; if (typeof cb === 'function') setTimeout(cb, 0); }
+    };
+
+    /* ── chrome mock ── */
+    window.chrome = {
+      storage: { local: storageMock, sync: storageMock },
+
+      runtime: {
+        lastError: null,
+        id: 'mock-extension-id',
+        getManifest: function () { return { version: '4.0.0', name: 'Awesome Screenshot' }; },
+        getURL:      function (p) { return p; },
+        sendMessage: function (msg, cb) {
+          /* prepareImage() calls sendMessage({action:"getData"}, cb).
+             Return empty dataURL + editor=truthy so prepareImage routes
+             to annotateImageUrl (not saveImageUrl). */
+          if (typeof cb === 'function') {
+            setTimeout(function () {
+              cb({
+                dataURL: '', menuType: 'upload', type: '', tabUrl: '',
+                tabtitle: '', zoomLevel: 1, counter: 0, ratio: 1,
+                scrollBar: false, contentCanScroll: false, scrollBarWidth: 0,
+                contentClip: 0, bottomClip: 0, centerOffX: 0, centerOffY: 0,
+                centerW: 0, centerH: 0, bgRegions: [], topCapturePostion: 0,
+                editor: '1'   /* makes !l === false → annotateImageUrl path */
+              });
+            }, 0);
+          }
+        },
+        onMessage: {
+          _l: [],
+          addListener:    function (fn) { this._l.push(fn); },
+          removeListener: function (fn) { this._l = this._l.filter(function (x) { return x !== fn; }); },
+          hasListener:    function (fn) { return this._l.indexOf(fn) !== -1; }
+        },
+        connect: function () {
+          return { onMessage: { addListener: function () {} }, postMessage: function () {} };
+        }
+      },
+
+      tabs: {
+        create:      function (o)    { if (o && o.url) window.open(o.url, '_blank'); },
+        sendMessage: function ()     {},
+        query:       function (q, cb){ if (cb) cb([]); }
+      },
+
+      permissions: {
+        request:  function (p, cb) { if (cb) cb(false); },
+        contains: function (p, cb) { if (cb) cb(false); }
+      },
+
+      downloads: {
+        download: function (opts, cb) {
+          try {
+            var a = document.createElement('a');
+            a.href = opts.url;
+            a.download = opts.filename || 'screenshot.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (e) {}
+          if (typeof cb === 'function') cb(Date.now());
+        }
+      },
+
+      cookies: { getAll: function (o, cb) { if (cb) cb([]); } },
+      i18n:    { getMessage: function (k) { return k; } }
+    };
+  })();
+  </script>
+</head>
+<body>
+  <div id="edit-page"></div>
+  <script src="javascripts/libs/color-thief.min.js"></script>
+</body>
+</html>
